@@ -10,6 +10,81 @@ import subprocess
 # 2 - extensive
 test_level = 1
 
+
+def readCase(src):
+    def subcontents(path):
+        l = []
+        for r, d, fs in os.walk(path):
+            for f in fs:
+                l.append(r + "/" + f)
+        return l
+
+    return {'constants': subcontents(src + '/constant'),
+            'system': subcontents(src + '/system'),
+            'times': [],
+            }
+
+
+def cloneCase(src, dst, modifiable=None, symlinks=False):
+    """ clone a case and create a new Case instance
+
+        symlinks: dont copy files but link files (not implementd)
+    """
+    os.mkdir(dst)
+    for d in ['/0', '/constant', '/system', '/chemistry']:
+        try:
+            shutil.copytree(src + d, dst + d)
+        except Exception as e:
+            print(e)
+
+    return Case(path=dst, modifiable=modifiable, parent=src)
+
+
+class Case:
+
+    def __init__(self, path, modifiable=None, parent=None):
+        self.path = path
+        self.modifiable = modifiable
+        self.files = ""
+
+    def setScheme(self, d, values):
+        """ """
+        def findSubDict(cnt, key):
+            before, inter = cnt.split(key + "\n{")
+            intersplit = inter.split('}')
+            value = key + "\n{" + intersplit[0] + "}\n"
+            return before, value, "}".join(intersplit[1:])
+
+        def replaceKeys(cnt, key, target):
+            before, inter = cnt.split(key)
+            intersplit = inter.split(';')
+            return "".join([before,
+                            key + " " + target + ";",
+                            ";".join(intersplit[1:])])
+
+        def replaceOFdictValue(cnt, d, key, target):
+            before, d, after = findSubDict(cnt, d)
+            d = replaceKeys(d, key, target)
+            return "".join([before, d, after])
+
+        schemesFile = self.path + "/system/fvSchemes"
+        cnt = ""
+        with open(schemesFile, 'r') as f:
+            cnt = "".join(f.readlines())
+
+        for key, value in values.items():
+            cnt = replaceOFdictValue(cnt, d, key, value)
+
+        with open(schemesFile, 'w') as f:
+            f.write(cnt)
+
+
+    def run(self, solver):
+        """ run case with given solver """
+        print("run")
+        execute_in_path(self.path, solver)
+
+
 blockMesh  = 'blockMesh'
 pisoFoam   = 'pisoFoam'
 simpleFoam = 'simpleFoam'
@@ -24,7 +99,7 @@ RASproperties = 'constant/RASProperties'
 chemistryProperties = 'constant/chemistryProperties'
 
 FOAMVERS = os.environ.get('WM_PROJECT_VERSION',False)
-STUDENTPC = ('tutpc' in os.environ.get('HOSTNAME'))
+# STUDENTPC = ('tutpc' in os.environ.get('HOSTNAME'))
 
 end = lambda x: 'Time = {}'.format(x)
 
