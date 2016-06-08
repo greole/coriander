@@ -35,7 +35,6 @@ def cloneCase(src, dst, modifiable=False, linkMesh=False, symlinks=False):
             #FIXME scientific notation
             ign = ['log*', 'processor*', 'postProcessing*', '[1-9]*[.]?[0-9]*']
             ign = (ign if not linkMesh else ign + ["constant*polyMesh*"])
-            print(ign)
             copytree(src, dst, ignore=ignore_patterns(*ign))
             if linkMesh:
                 cmd = "ln -s " + "../../" + src + "/constant/polyMesh " + dst + "/constant/polyMesh"
@@ -75,10 +74,12 @@ def createBase(basePath, solver, links=None, copyCoriander=True):
 class ParameterVariation():
 
 
-    def __init__(self, base, study_name, func, case_name, param, values, linkMesh=False, exe=None):
+    def __init__(self, base, study_name, func, case_name,
+            param, values, linkMesh=False, exe=None):
         # clone base first
         self.func = func
         self.base = (base if isinstance(base, str) else Case(base))
+
         self.cases = [cloneCase(
                         base,
                         study_name + "/" + case_name + self.value_to_name(k),
@@ -90,14 +91,15 @@ class ParameterVariation():
         if isinstance(exe, list):
             self.execute(exe)
 
-
+    def map_initial(self, path, src_time="latestTime", dst_time=None):
+        [c.map_initial(path, src_time, dst_time) for c in self.cases]
 
     def value_to_name(self, value):
         """ some values are specified as dicts thus a reasonable name
             needs to be found """
         if isinstance(value, dict):
             key = list(value.keys())[0]
-            return "_{}_{}".format(key, value[key])
+            return "_{}_{}".format(key, value[key]["name"])
         else:
             return "_" + str(value)
 
@@ -107,6 +109,8 @@ class ParameterVariation():
                 c.run(f)
 
     def apply(self, funcs):
+        """ .apply([("funcName", {"file":{"key":"Value"}})])
+        """
         for f in funcs:
             if isinstance(f, tuple):
                 [getattr(c, f[0])(f[1]) for c in self.cases]
@@ -125,6 +129,26 @@ class ParameterVariation():
     def reconstruct_sample(self):
         self.apply(["reconstruct"])
 
+    def setScheme(self, repl):
+        self.apply([("setScheme", repl)])
+
+    def endTime(self, repl):
+        self.apply([("endTime", repl)])
+
+    def setStr(self, repl):
+        self.apply([("setStr", repl)])
+
+    def setKey(self, repl):
+        self.apply([("setKey", repl)])
+
+    def addKey(self, repl):
+        self.apply([("addKey", repl)])
+
+    def controlDict(self, repl):
+        """ usage .controlDict({"endTime": 0.1}) """
+        self.apply([("controlDict", repl)])
+
+
 class Case:
 
     def __init__(self, path, modifiable=None, parent=None):
@@ -139,6 +163,11 @@ class Case:
         if not os.path.exists(self.coriander_path):
                 os.makedirs(self.coriander_path)
         execute_in_path(self.path, 'echo parent:' + self.parent + ' > .coriander/parent')
+
+
+    def map_initial(self, path, src_time="latestTime", dst_time=None, meanToInst=False):
+        cmd = "mapFields -consistent -case {} -sourceTime {} {}".format(self.path, src_time, path)
+        execute(cmd)
 
     def setScheme(self, repl):
         """
@@ -157,13 +186,24 @@ class Case:
                             key + " " + target + ";",
                             ";".join(intersplit[1:])])
 
+        def find_keys(cnt):
+            before, inter = cnt.split(key + "\n{")
+            lines = [line.split() for line in inter.split('\n')]
+            return [line[0] for line in lines if line and line[0]  != "//"]
+
         def replaceOFdictValue(cnt, d, key, target):
             before, d, after = findSubDict(cnt, d)
-            d = replaceKeys(d, key, target)
+            if not key:
+                key = find_keys(d)
+            if not isinstance(key, list):
+                key = [key]
+            for k in key:
+                d = replaceKeys(d, k, target)
             return "".join([before, d, after])
 
         d = list(repl.keys())[0]
         values = repl[d]
+
 
         schemesFile = self.path + "/system/fvSchemes"
         cnt = ""
@@ -176,6 +216,13 @@ class Case:
         with open(schemesFile, 'w') as f:
             f.write(cnt)
 
+    def addKey(self, d):
+        fn = list(d.keys())[0]
+        repl = d[fn]
+        for k, v in repl.items():
+            execute_in_path(self.path, "echo '{}' >> {}".format(v, fn))
+
+
     def setKey(self, d):
         """ usage setKey(constant/coalCloudProperties,{parcelsPerSecond:1e6}"""
         fn = list(d.keys())[0]
@@ -183,7 +230,13 @@ class Case:
         for k, v in repl.items():
             execute_in_path(
                     self.path,
-                    subs(k + "[ A-Za-z0-9.]*;", k + " " + v + ";", fn))
+                    subs(k + "[ A-Za-z0-9.\-]*;", k + " " + v + ";", fn))
+
+    def endTime(self, value):
+        self.setKey(self, {"system/controlDict":{"endTime": value}})
+
+    def controlDict(self, repl):
+        self.setKey({"system/controlDict": repl})
 
     def setStr(self, d):
         """ usage setKey(constant/coalCloudProperties,{str:val}"""
