@@ -99,7 +99,7 @@ class ParameterVariation():
             needs to be found """
         if isinstance(value, dict):
             key = list(value.keys())[0]
-            return "_{}_{}".format(key, value[key]["name"])
+            return "_{}_{}".format(key, value[key].replace(" ", "_"))
         else:
             return "_" + str(value)
 
